@@ -74,9 +74,11 @@ def test_signed_single_agent_crew(caplog: pytest.LogCaptureFixture) -> None:
 
         assert result is not None
 
-    identity = agent._openbox_identity
-    assert identity is not None, "identity must resolve when did + private key envs are set"
-    assert identity.did == os.environ[DID_ENV]
+    binding = agent._binding
+    assert binding is not None and binding.config.identity_method == "openbox_did", (
+        "identity must resolve when did + private key envs are set"
+    )
+    assert binding.did == os.environ[DID_ENV]
 
     governance_warnings = [
         r for r in caplog.records if r.name.startswith("openbox") and r.levelno >= logging.WARNING

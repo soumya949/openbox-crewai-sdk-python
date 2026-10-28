@@ -35,6 +35,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -161,28 +162,33 @@ class CapturedCall:
 
 
 @pytest.fixture
-def captured_calls() -> list[CapturedCall]:
-    return []
+def captured_calls() -> Iterator[list[CapturedCall]]:
+    from openbox._clients import AgentClient
+
+    original = (AgentClient.evaluate, AgentClient.aevaluate)
+    yield []
+    AgentClient.evaluate, AgentClient.aevaluate = original  # type: ignore[method-assign]
 
 
 def _capture_governance_calls(
     engine: OpenBoxEngine, calls: list[CapturedCall]
 ) -> None:
-    """Wrap engine.client.evaluate/aevaluate to record outbound calls."""
-    client = engine.client
-    original_evaluate = client.evaluate
-    original_aevaluate = client.aevaluate
+    """Wrap every agent client's evaluate/aevaluate to record outbound calls."""
+    from openbox._clients import AgentClient
 
-    def wrapped_evaluate(payload, api_key, identity=None):  # type: ignore[no-untyped-def]
+    original_evaluate = AgentClient.evaluate
+    original_aevaluate = AgentClient.aevaluate
+
+    def wrapped_evaluate(self, payload):  # type: ignore[no-untyped-def]
         calls.append(CapturedCall(payload=payload))
-        return original_evaluate(payload, api_key, identity)
+        return original_evaluate(self, payload)
 
-    async def wrapped_aevaluate(payload, api_key, identity=None):  # type: ignore[no-untyped-def]
+    async def wrapped_aevaluate(self, payload):  # type: ignore[no-untyped-def]
         calls.append(CapturedCall(payload=payload))
-        return await original_aevaluate(payload, api_key, identity)
+        return await original_aevaluate(self, payload)
 
-    client.evaluate = wrapped_evaluate  # type: ignore[method-assign]
-    client.aevaluate = wrapped_aevaluate  # type: ignore[method-assign]
+    AgentClient.evaluate = wrapped_evaluate  # type: ignore[method-assign]
+    AgentClient.aevaluate = wrapped_aevaluate  # type: ignore[method-assign]
 
 
 # -- Test --------------------------------------------------------------------

@@ -23,7 +23,7 @@ from crewai import LLM, Crew, Process
 from dotenv import load_dotenv
 
 from openbox import OpenBoxAgent, OpenBoxTask, create_openbox_engine
-from openbox.core.errors import OpenBoxAuthError
+from openbox.errors import OpenBoxAuthError
 
 from ._helpers import generate_wrong_seed_b64
 

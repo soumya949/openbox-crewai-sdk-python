@@ -4,8 +4,9 @@
 
 | Error | Check |
 | --- | --- |
-| `OpenBoxConfigError` | `OPENBOX_URL` set; `{PREFIX}_API_KEY` set per agent; DID and private key paired (or both omitted); DID matches `did:aip:<uuid>`; private key is base64-decodable to 32 bytes |
+| `OpenBoxConfigError` | `OPENBOX_URL` set; `{PREFIX}_API_KEY` set per agent; only one identity method per agent (DID **or** Okta **or** workload key); DID and private key paired (or both omitted); DID matches `did:aip:<uuid>`; private key is base64-decodable to 32 bytes; Okta metadata either all set or all omitted |
 | `OpenBoxAuthError` | API key matches `obx_live_*`/`obx_test_*` and is valid in Core |
+| `OpenBoxSigningError` | read `reason_code`: `timestamp_outside_window` means the host clock is off by more than 5 minutes; `did_agent_mismatch` means the DID belongs to another agent; `signature_invalid` means the private key doesn't match the registered key |
 | `OpenBoxInsecureURLError` | non-localhost URL is `https://` |
 | `OpenBoxNetworkError` | the application can reach `OPENBOX_URL` |
 
@@ -39,9 +40,13 @@ result := {"decision": "BLOCK", "reason": "..."} if {
 
 Match `span.name == "file.write"` (always forwarded by Core), not a stripped attribute.
 
-## Test expects `GovernanceHaltError` but gets `ValueError`
+## Test expects `GovernanceHaltError` but gets `GovernanceBlockedError`
 
-A Layer 3 hook raised `GovernanceBlockedError` and CrewAI's tool retry path collapsed it into the LLM gate. See [approvals-and-guardrails.md — Layer 3 swallowing caveat](./approvals-and-guardrails.md#layer-3-swallowing-caveat) for the mechanism and the fix (move the trigger to Layer 1).
+Since 3.0, `BLOCK` raises `GovernanceBlockedError` at every layer; only `HALT` raises `GovernanceHaltError`. Catch `GovernanceBlockedError` for blocks. See [approvals-and-guardrails.md — Layer 3 swallowing caveat](./approvals-and-guardrails.md#layer-3-swallowing-caveat) for how Layer 3 verdicts surface from tools.
+
+## Requests fail with `OpenBoxAuthError` under `fail_open`
+
+Expected: `401`/`403` always fail closed. Check that the agent's API key is valid and not revoked in Core.
 
 ## Duplicate approval requests
 
@@ -53,7 +58,7 @@ Policy is treating hook-triggered telemetry as a business action. Limit approval
 - Core eventually returns `allow`/`block`/`halt` for the polled approval ID
 - approval window hasn't expired (raises `GovernanceApprovalExpiredError`)
 
-The polling loop has no built-in timeout — it polls until Core responds.
+By default polling continues until Core decides or the approval expires. Set `hitl_max_wait` to bound it; polling also stops with `ApprovalTimeoutError` after 60 consecutive failed polls.
 
 ## Multiple engines
 

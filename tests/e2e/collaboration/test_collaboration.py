@@ -39,8 +39,7 @@ from crewai import LLM, Crew, Process
 from dotenv import load_dotenv
 
 from openbox import OpenBoxAgent, OpenBoxEngine, OpenBoxTask, create_openbox_engine
-from openbox.core.aip_signing import AgentIdentity
-from openbox.core.errors import GovernanceHaltError
+from openbox.errors import GovernanceHaltError
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -136,8 +135,7 @@ def _build_crew(task_description: str, crew_name: str):
 @dataclass
 class CapturedCall:
     payload: dict[str, Any]
-    api_key: str
-    identity: AgentIdentity | None
+    signed: bool
 
 
 @pytest.fixture
@@ -146,21 +144,26 @@ def captured_calls() -> list[CapturedCall]:
 
 
 def _capture_governance_calls(engine: OpenBoxEngine, calls: list[CapturedCall]) -> None:
-    """Wrap engine.client.evaluate/aevaluate to record every outbound call."""
-    client = engine.client
-    original_evaluate = client.evaluate
-    original_aevaluate = client.aevaluate
+    """Wrap every governed agent's client to record each outbound evaluate call."""
+    for binding in engine._bindings.values():
+        client = binding.client
+        # Workload identity authenticates with a token alongside the API key.
+        signed = binding.config.identity_method not in (None, "legacy_unsigned") or bool(
+            binding.config.keycloak_workload_private_key()
+        )
+        original_evaluate = client.evaluate
+        original_aevaluate = client.aevaluate
 
-    def wrapped_evaluate(payload, api_key, identity=None):  # type: ignore[no-untyped-def]
-        calls.append(CapturedCall(payload=payload, api_key=api_key, identity=identity))
-        return original_evaluate(payload, api_key, identity)
+        def wrapped_evaluate(payload, _orig=original_evaluate, _signed=signed):  # type: ignore[no-untyped-def]
+            calls.append(CapturedCall(payload=payload, signed=_signed))
+            return _orig(payload)
 
-    async def wrapped_aevaluate(payload, api_key, identity=None):  # type: ignore[no-untyped-def]
-        calls.append(CapturedCall(payload=payload, api_key=api_key, identity=identity))
-        return await original_aevaluate(payload, api_key, identity)
+        async def wrapped_aevaluate(payload, _orig=original_aevaluate, _signed=signed):  # type: ignore[no-untyped-def]
+            calls.append(CapturedCall(payload=payload, signed=_signed))
+            return await _orig(payload)
 
-    client.evaluate = wrapped_evaluate  # type: ignore[method-assign]
-    client.aevaluate = wrapped_aevaluate  # type: ignore[method-assign]
+        client.evaluate = wrapped_evaluate  # type: ignore[method-assign]
+        client.aevaluate = wrapped_aevaluate  # type: ignore[method-assign]
 
 
 # ── Task descriptions ───────────────────────────────────────────────────────
@@ -196,18 +199,16 @@ def test_allow_collaboration(captured_calls: list[CapturedCall]) -> None:
     """Clean collaborative task completes end-to-end; every governance call is signed."""
     with create_openbox_engine(debug_log=True) as engine:
         crew, researcher, writer, editor = _build_crew(CLEAN_DESCRIPTION, "collab-allow-test")
-        _capture_governance_calls(engine, captured_calls)
-
         governed_crew = engine.govern(crew)
+        _capture_governance_calls(engine, captured_calls)
         result = governed_crew.kickoff()
 
         assert result is not None
 
-        # Every governance call the SDK made carried an AgentIdentity — i.e. was
-        # signed. Unsigned calls would leave identity=None and indicate DID
-        # provisioning is broken.
+        # Every governance call the SDK made was signed. Unsigned calls
+        # indicate identity provisioning is broken.
         assert captured_calls, "no governance calls captured"
-        unsigned = [c for c in captured_calls if c.identity is None]
+        unsigned = [c for c in captured_calls if not c.signed]
         assert not unsigned, f"{len(unsigned)} governance calls were unsigned"
 
 

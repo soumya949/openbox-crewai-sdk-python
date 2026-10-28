@@ -40,7 +40,7 @@ The SDK evaluates governance at three points around each CrewAI task:
 | --- | --- | --- |
 | 1 | before a task starts | `ActivityStarted` |
 | 2 | after a task completes | `ActivityCompleted` |
-| 3 | during HTTP / DB / file / LLM operations | hook payload |
+| 3 | during HTTP / DB / file / function / LLM operations | hook payload |
 
 Other docs reference these layer numbers.
 
@@ -54,13 +54,14 @@ OPENBOX_RESEARCHER_DID=did:aip:550e8400-e29b-41d4-a716-446655440000
 OPENBOX_RESEARCHER_PRIVATE_KEY=base64_ed25519_seed
 ```
 
-Distinct agents in one crew can have distinct identities. Omit both DID fields only if you intend to run without AIP request signing.
+Distinct agents in one crew can have distinct identities. Okta AI Agent and Keycloak workload identities are also supported under the same prefix — see [configuration.md](./configuration.md#agent-identity). Omit identity variables only if you intend to run without request signing.
 
 ## Support matrix
 
 | Component | Requirement |
 | --- | --- |
-| Python | `>=3.10` |
+| Python | `>=3.11` |
+| openbox-sdk-python | `>=1.5.0` (installed automatically) |
 | CrewAI | `>=1.14.1` |
 | OpenBox Core | reachable over HTTPS (HTTP allowed for localhost) |
 
@@ -70,7 +71,7 @@ Distinct agents in one crew can have distinct identities. Omit both DID fields o
 2. [configuration.md](./configuration.md)
 3. [events-and-telemetry.md](./events-and-telemetry.md) — what gets sent to OpenBox, including HTTP/DB/file capture
 4. [approvals-and-guardrails.md](./approvals-and-guardrails.md) — verdicts, errors, HITL
-5. [security-and-privacy.md](./security-and-privacy.md) — transport, AIP signing
+5. [security-and-privacy.md](./security-and-privacy.md) — transport, request signing
 6. [architecture.md](./architecture.md) — runtime model and usage rules
 7. [troubleshooting.md](./troubleshooting.md)
 8. [api-reference.md](./api-reference.md)

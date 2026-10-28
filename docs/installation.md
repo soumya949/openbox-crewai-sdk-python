@@ -6,7 +6,12 @@
 pip install openbox-crewai-sdk-python
 # or
 uv add openbox-crewai-sdk-python
+
+# with database instrumentation (SQLAlchemy, DB-API, asyncpg, redis, pymongo)
+pip install "openbox-crewai-sdk-python[db]"
 ```
+
+Requires Python 3.11 or newer. The governance core ships as the `openbox-sdk-python` dependency (imported as `openbox_core`).
 
 ## Environment variables
 
@@ -15,16 +20,18 @@ export OPENBOX_URL="https://your-openbox-core.example"
 
 # Per agent — env_prefix on OpenBoxAgent drives the lookup
 export OPENBOX_RESEARCHER_API_KEY="obx_live_your_key"
-export OPENBOX_RESEARCHER_DID="did:aip:<uuid>"              # enable AIP signing
+export OPENBOX_RESEARCHER_DID="did:aip:<uuid>"              # OpenBox DID signing
 export OPENBOX_RESEARCHER_PRIVATE_KEY="base64_ed25519_seed" # paired with DID
 ```
+
+Okta AI Agent and Keycloak workload identities are configured under the same prefix — see [configuration.md](./configuration.md#agent-identity).
 
 Validation at `engine.govern(crew)`:
 
 - API key matches `obx_live_*` or `obx_test_*`
 - non-localhost URLs use HTTPS
-- DID and private key configured together when AIP signing is enabled
-- API key round-tripped against `/api/v1/auth/validate`
+- exactly one identity method per agent; DID and private key configured together
+- API key (and signature, when an identity is configured) round-tripped against Core's auth-validate endpoint
 
 A bad value raises `OpenBoxConfigError`, `OpenBoxAuthError`, or `OpenBoxNetworkError`.
 
@@ -52,7 +59,7 @@ with create_openbox_engine() as engine:
     print(governed.kickoff())
 ```
 
-The context manager closes the engine on exit, tearing down OTel and HTTP clients.
+The context manager closes the engine on exit, flushing pending telemetry and tearing down instrumentation and HTTP clients.
 
 ## Local development
 

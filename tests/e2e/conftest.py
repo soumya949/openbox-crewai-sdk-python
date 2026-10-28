@@ -41,37 +41,28 @@ def _configure_crewai_storage(tmp_path_factory: pytest.TempPathFactory) -> None:
 
 @pytest.fixture
 def capture_engine_evaluations(monkeypatch: pytest.MonkeyPatch):
+    """Record every evaluate call any governed agent sends (all routes)."""
+    from openbox._clients import AgentClient
+
     def _install(engine: Any) -> list[dict[str, Any]]:
         captured: list[dict[str, Any]] = []
+        original_evaluate = AgentClient.evaluate
+        original_aevaluate = AgentClient.aevaluate
 
-        client = engine.client
-        original_evaluate = client.evaluate
-        original_aevaluate = client.aevaluate
-
-        def wrapped_evaluate(payload, api_key, identity=None):  # type: ignore[no-untyped-def]
+        def wrapped_evaluate(self, payload):  # type: ignore[no-untyped-def]
             captured.append(
-                {
-                    "mode": "sync",
-                    "payload": deepcopy(payload),
-                    "api_key": api_key,
-                    "identity": identity,
-                }
+                {"mode": "sync", "payload": deepcopy(payload), "api_key": self.config.api_key}
             )
-            return original_evaluate(payload, api_key, identity)
+            return original_evaluate(self, payload)
 
-        async def wrapped_aevaluate(payload, api_key, identity=None):  # type: ignore[no-untyped-def]
+        async def wrapped_aevaluate(self, payload):  # type: ignore[no-untyped-def]
             captured.append(
-                {
-                    "mode": "async",
-                    "payload": deepcopy(payload),
-                    "api_key": api_key,
-                    "identity": identity,
-                }
+                {"mode": "async", "payload": deepcopy(payload), "api_key": self.config.api_key}
             )
-            return await original_aevaluate(payload, api_key, identity)
+            return await original_aevaluate(self, payload)
 
-        monkeypatch.setattr(client, "evaluate", wrapped_evaluate)
-        monkeypatch.setattr(client, "aevaluate", wrapped_aevaluate)
+        monkeypatch.setattr(AgentClient, "evaluate", wrapped_evaluate)
+        monkeypatch.setattr(AgentClient, "aevaluate", wrapped_aevaluate)
         return captured
 
     return _install

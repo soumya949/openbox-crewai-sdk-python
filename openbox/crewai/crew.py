@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from crewai import Crew
@@ -13,64 +15,40 @@ from crewai.hooks.llm_hooks import (
 )
 from pydantic import PrivateAttr
 
-from openbox.core.client import GovernanceClient
-from openbox.core.config import GovernanceConfig
-from openbox.core.errors import (
-    GovernanceAPIError,
-    GovernanceApprovalExpiredError,
-    GovernanceBlockedError,
-    GovernanceHaltError,
-    OpenBoxConfigError,
-    raise_governance_block,
-)
+from openbox._context import multi_agent_session_id_var
 from openbox.crewai.agent import OpenBoxAgent
 from openbox.engine import OpenBoxEngine
-from openbox.instrumentation.span_processor import GovernanceSpanProcessor
-from openbox.utils import (
-    _llm_allowed_var,
-    _llm_block_info_var,
-    _multi_agent_session_id_var,
-)
+from openbox.errors import GOVERNANCE_ERRORS, OpenBoxConfigError, raise_for_stop
+
+logger = logging.getLogger("openbox")
+
+_LEFTOVER_SESSION = "Previous kickoff ended without closing this session"
 
 
 def _register_passthrough_exceptions() -> None:
     """Register governance exceptions so CrewAI doesn't retry them."""
     import crewai.agent.core as _core
 
-    governance_exceptions = (
-        GovernanceHaltError,
-        GovernanceBlockedError,
-        GovernanceAPIError,
-        GovernanceApprovalExpiredError,
-    )
     existing = _core._passthrough_exceptions
-    missing = tuple(e for e in governance_exceptions if e not in existing)
+    missing = tuple(e for e in GOVERNANCE_ERRORS if e not in existing)
     if missing:
         _core._passthrough_exceptions = existing + missing
 
 
-logger = logging.getLogger("openbox")
+def _make_llm_hook(engine: OpenBoxEngine) -> Any:
+    def llm_hook(context: Any) -> bool:
+        stop = engine.active_stop()
+        if stop is not None:
+            raise_for_stop(stop, subject="LLM call")
+        return True
+
+    return llm_hook
 
 
 class GovernedCrew(Crew):
-    _governance_client: GovernanceClient | None = PrivateAttr(default=None)
-    _span_processor: GovernanceSpanProcessor | None = PrivateAttr(default=None)
-    _config: GovernanceConfig | None = PrivateAttr(default=None)
     _governance_engine: OpenBoxEngine | None = PrivateAttr(default=None)
     _crew_execution_id: str = PrivateAttr(default="")
     _llm_hook: Any = PrivateAttr(default=None)
-
-    def configure_governance(
-        self,
-        client: GovernanceClient,
-        config: GovernanceConfig,
-        span_processor: GovernanceSpanProcessor,
-        engine: OpenBoxEngine | None = None,
-    ) -> None:
-        self._governance_client = client
-        self._config = config
-        self._span_processor = span_processor
-        self._governance_engine = engine
 
     def bind_openbox_engine(self, engine: OpenBoxEngine) -> GovernedCrew:
         governed_agents = self._governed_agents()
@@ -80,12 +58,8 @@ class GovernedCrew(Crew):
                 "Plain Agent instances are not governed."
             )
         engine.validate_agent_api_keys(governed_agents)
-        self.configure_governance(
-            engine.client,
-            engine.config,
-            engine.ensure_started(),
-            engine=engine,
-        )
+        engine.ensure_started()
+        self._governance_engine = engine
         return self
 
     def _governed_agents(self) -> list[OpenBoxAgent]:
@@ -154,67 +128,69 @@ class GovernedCrew(Crew):
         self.manager_agent = manager
         manager.crew = self
 
+    def _bound_engine(self, engine: OpenBoxEngine | None) -> OpenBoxEngine | None:
+        if engine is not None:
+            self.bind_openbox_engine(engine)
+        if self._governed_agents() and self._governance_engine is None:
+            raise OpenBoxConfigError(
+                "This governed crew has not been bound to an OpenBoxEngine. Use "
+                "engine.govern(crew) before kickoff()."
+            )
+        return self._governance_engine
+
+    @contextmanager
+    def _kickoff_scope(self, engine: OpenBoxEngine) -> Iterator[None]:
+        self._crew_execution_id = str(uuid.uuid4())
+        crew_name = self.name or "crew"
+
+        # Outer wins: if a Flow above us already opened a session, propagate.
+        # Otherwise this Crew opens its own per-kickoff session.
+        session_token = None
+        if multi_agent_session_id_var.get() is None:
+            session_token = multi_agent_session_id_var.set(str(uuid.uuid4()))
+
+        try:
+            for agent in self._governed_agents():
+                agent.configure_governance(engine, crew_name, self._crew_execution_id)
+            _register_passthrough_exceptions()
+            if engine.config.llm_level_governance:
+                self._llm_hook = _make_llm_hook(engine)
+                register_before_llm_call_hook(self._llm_hook)
+            yield
+        finally:
+            if session_token is not None:
+                multi_agent_session_id_var.reset(session_token)
+
+    def _release(self) -> None:
+        if self._llm_hook:
+            unregister_before_llm_call_hook(self._llm_hook)
+            self._llm_hook = None
+        for agent in self._governed_agents():
+            agent._reset_run_state()
+
     def kickoff(
         self,
         engine: OpenBoxEngine | None = None,
         inputs: dict[str, Any] | None = None,
         input_files: dict[str, Any] | None = None,
     ) -> Any:
-        governed_agents = self._governed_agents()
-        if engine is not None:
-            self.bind_openbox_engine(engine)
-        if governed_agents and (not self._governance_client or not self._config):
-            raise OpenBoxConfigError(
-                "This governed crew has not been bound to an OpenBoxEngine. Use "
-                "engine.govern(crew) before kickoff()."
-            )
-        if not self._governance_client or not self._config:
+        bound = self._bound_engine(engine)
+        if bound is None:
             return super().kickoff(inputs=inputs, input_files=input_files)
 
-        self._reset_execution_gate()
         self._drain_leftover_sessions()
-
-        self._crew_execution_id = str(uuid.uuid4())
-        crew_name = self.name or "crew"
-        metadata: dict[str, Any] = {
-            "crew_name": crew_name,
-            "crew_execution_id": self._crew_execution_id,
-        }
-
-        # Outer wins: if a Flow above us already opened a session, propagate.
-        # Otherwise this Crew opens its own per-kickoff session.
-        session_token = None
-        if _multi_agent_session_id_var.get() is None:
-            session_token = _multi_agent_session_id_var.set(str(uuid.uuid4()))
-
-        assert self._span_processor is not None
-        for agent in self._governed_agents():
-            agent.configure_governance(
-                self._governance_client,
-                self._span_processor,
-                self._config,
-                crew_name,
-                self._crew_execution_id,
-                engine=self._governance_engine,
-            )
-
-        _register_passthrough_exceptions()
-
-        if self._config.llm_level_governance:
-            self._llm_hook = _make_llm_hook()
-            register_before_llm_call_hook(self._llm_hook)
-
-        try:
-            return super().kickoff(inputs=inputs, input_files=input_files)
-        finally:
+        with self._kickoff_scope(bound):
+            error: BaseException | None = None
             try:
-                self._cleanup(crew_name, metadata)
+                return super().kickoff(inputs=inputs, input_files=input_files)
+            except BaseException as exc:
+                error = exc
+                raise
             finally:
-                self._reset_execution_gate()
-                for agent in self._governed_agents():
-                    agent._reset_run_state()
-                if session_token is not None:
-                    _multi_agent_session_id_var.reset(session_token)
+                try:
+                    self._cleanup(error)
+                finally:
+                    self._release()
 
     async def akickoff(
         self,
@@ -222,65 +198,23 @@ class GovernedCrew(Crew):
         inputs: dict[str, Any] | None = None,
         input_files: dict[str, Any] | None = None,
     ) -> Any:
-        governed_agents = self._governed_agents()
-        if engine is not None:
-            self.bind_openbox_engine(engine)
-        if governed_agents and (not self._governance_client or not self._config):
-            raise OpenBoxConfigError(
-                "This governed crew has not been bound to an OpenBoxEngine. Use "
-                "engine.govern(crew) before akickoff()."
-            )
-        if not self._governance_client or not self._config:
+        bound = self._bound_engine(engine)
+        if bound is None:
             return await super().akickoff(inputs=inputs, input_files=input_files)
 
-        self._reset_execution_gate()
         await self._adrain_leftover_sessions()
-
-        self._crew_execution_id = str(uuid.uuid4())
-        crew_name = self.name or "crew"
-        metadata: dict[str, Any] = {
-            "crew_name": crew_name,
-            "crew_execution_id": self._crew_execution_id,
-        }
-
-        # Outer wins: if a Flow above us already opened a session, propagate.
-        # Otherwise this Crew opens its own per-kickoff session.
-        session_token = None
-        if _multi_agent_session_id_var.get() is None:
-            session_token = _multi_agent_session_id_var.set(str(uuid.uuid4()))
-
-        assert self._span_processor is not None
-        for agent in self._governed_agents():
-            agent.configure_governance(
-                self._governance_client,
-                self._span_processor,
-                self._config,
-                crew_name,
-                self._crew_execution_id,
-                engine=self._governance_engine,
-            )
-
-        _register_passthrough_exceptions()
-
-        if self._config.llm_level_governance:
-            self._llm_hook = _make_llm_hook()
-            register_before_llm_call_hook(self._llm_hook)
-
-        try:
-            return await super().akickoff(inputs=inputs, input_files=input_files)
-        finally:
+        with self._kickoff_scope(bound):
+            error: BaseException | None = None
             try:
-                await self._acleanup(crew_name, metadata)
+                return await super().akickoff(inputs=inputs, input_files=input_files)
+            except BaseException as exc:
+                error = exc
+                raise
             finally:
-                self._reset_execution_gate()
-                for agent in self._governed_agents():
-                    agent._reset_run_state()
-                if session_token is not None:
-                    _multi_agent_session_id_var.reset(session_token)
-
-    def _reset_execution_gate(self) -> None:
-        """Restore execution-scoped LLM gating to the default allow state."""
-        _llm_allowed_var.set(True)
+                try:
+                    await self._acleanup(error)
+                finally:
+                    self._release()
 
     def _drain_leftover_sessions(self) -> None:
         """Close any session left open by a prior crashed run, then reset state.
@@ -289,93 +223,35 @@ class GovernedCrew(Crew):
         skips the finally block, so cleanup never runs. Without this, the
         leftover session is reported with the new run's metadata and the next
         ensure_session() short-circuits. force=True so halted leftovers still
-        push a terminal WorkflowCompleted — Core never saw the halt verdict.
+        push a terminal event — Core never saw the halt verdict.
         """
-        assert self._governance_client is not None
         for agent in self._governed_agents():
             if agent._session_started:
-                client = agent._governance_client or self._governance_client
                 try:
-                    agent.close_session(
-                        client,
-                        agent._crew_name or (self.name or "crew"),
-                        {
-                            "crew_name": agent._crew_name or (self.name or "crew"),
-                            "crew_execution_id": agent._crew_execution_id or "",
-                        },
-                        status="halted" if agent._halted else "completed",
-                        force=True,
-                    )
+                    agent.close_session(error=_LEFTOVER_SESSION, force=True)
                 except Exception:
                     logger.exception("Error closing leftover session for agent %r", agent.role)
             agent._reset_run_state()
 
     async def _adrain_leftover_sessions(self) -> None:
-        assert self._governance_client is not None
         for agent in self._governed_agents():
             if agent._session_started:
-                client = agent._governance_client or self._governance_client
                 try:
-                    await agent._aclose_session(
-                        client,
-                        agent._crew_name or (self.name or "crew"),
-                        {
-                            "crew_name": agent._crew_name or (self.name or "crew"),
-                            "crew_execution_id": agent._crew_execution_id or "",
-                        },
-                        status="halted" if agent._halted else "completed",
-                        force=True,
-                    )
+                    await agent.aclose_session(error=_LEFTOVER_SESSION, force=True)
                 except Exception:
                     logger.exception("Error closing leftover session for agent %r", agent.role)
             agent._reset_run_state()
 
-    async def _acleanup(self, crew_name: str, metadata: dict[str, Any]) -> None:
-        if self._governance_client:
-            for agent in self._governed_agents():
-                if agent._session_started:
-                    status = "halted" if agent._halted else "completed"
-                    try:
-                        await agent._aclose_session(
-                            self._governance_client,
-                            crew_name,
-                            metadata,
-                            status=status,
-                        )
-                    except Exception:
-                        logger.exception("Error closing session for agent %r", agent.role)
-                agent._reset_run_state()
+    def _cleanup(self, error: BaseException | None) -> None:
+        for agent in self._governed_agents():
+            try:
+                agent.close_session(error=error)
+            except Exception:
+                logger.exception("Error closing session for agent %r", agent.role)
 
-        if self._llm_hook:
-            unregister_before_llm_call_hook(self._llm_hook)
-            self._llm_hook = None
-
-    def _cleanup(self, crew_name: str, metadata: dict[str, Any]) -> None:
-        if self._governance_client:
-            for agent in self._governed_agents():
-                if agent._session_started:
-                    status = "halted" if agent._halted else "completed"
-                    try:
-                        agent.close_session(
-                            self._governance_client,
-                            crew_name,
-                            metadata,
-                            status=status,
-                        )
-                    except Exception:
-                        logger.exception("Error closing session for agent %r", agent.role)
-                agent._reset_run_state()
-
-        if self._llm_hook:
-            unregister_before_llm_call_hook(self._llm_hook)
-            self._llm_hook = None
-
-
-def _make_llm_hook() -> Any:
-    def llm_hook(context: Any) -> bool:
-        if _llm_allowed_var.get():
-            return True
-        raise_governance_block(_llm_block_info_var.get(), subject="LLM call")
-        return False
-
-    return llm_hook
+    async def _acleanup(self, error: BaseException | None) -> None:
+        for agent in self._governed_agents():
+            try:
+                await agent.aclose_session(error=error)
+            except Exception:
+                logger.exception("Error closing session for agent %r", agent.role)

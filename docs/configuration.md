@@ -10,32 +10,63 @@
 | `on_fallback` | `"log_warning"` | Core `fallback_used=true` policy: `log_warning` or `fail_closed` |
 | `send_task_start_event` | `True` | emit `ActivityStarted` (Layer 1) |
 | `send_task_completed_event` | `True` | emit `ActivityCompleted` (Layer 2) |
-| `llm_level_governance` | `True` | gate LLM calls after a halt (Layer 3) |
+| `llm_level_governance` | `True` | gate LLM calls after a Layer 3 stop |
 | `hitl_enabled` | `True` | poll for approval on `REQUIRE_APPROVAL` |
 | `hitl_poll_interval` | `5.0` | poll interval (s) |
+| `hitl_max_wait` | `None` | give up waiting after this many seconds (`ApprovalTimeoutError`); `None` waits until Core decides or the approval expires |
 | `exclude_crews_hitl` | `None` | crew names to skip HITL polling for |
+| `instrument_http` | `True` | enable HTTP instrumentation |
 | `instrument_databases` | `True` | enable DB instrumentation |
-| `db_libraries` | `None` (all) | restrict to specific DB drivers |
+| `db_libraries` | `None` (all) | restrict DB instrumentation, e.g. `{"sqlalchemy", "psycopg2"}` |
 | `instrument_file_io` | `False` | enable file I/O instrumentation |
-| `debug_log` | `False` | per-agent trace logging |
+| `max_body_size` | `65536` | truncate captured request/response bodies to this many characters |
+| `redact_keys` | `None` | attribute/body keys whose values are redacted before sending |
+| `debug_log` | `False` | per-agent trace logging to `openbox_logs/` |
 
 ## Environment variables
 
 | Name | Required | Purpose |
 | --- | --- | --- |
 | `OPENBOX_URL` | yes (or `api_url`) | Core URL |
-| `{PREFIX}_API_KEY` | yes per agent | per-agent OpenBox API key |
-| `{PREFIX}_DID` | optional | agent DID; when set with the private key, enables AIP signing |
-| `{PREFIX}_PRIVATE_KEY` | optional | Ed25519 seed (base64); paired with DID for AIP signing |
+| `{PREFIX}_API_KEY` | yes per agent | per-agent OpenBox API key (`obx_live_*` / `obx_test_*`) |
 
-`{PREFIX}` is each agent's `env_prefix`. DID and private key must be configured together or both omitted.
+`{PREFIX}` is each agent's `env_prefix`. Only variables under that prefix are read for an agent: global `OPENBOX_API_KEY`, `OPENBOX_AGENT_DID` and the like are never shared between agents.
+
+### Agent identity
+
+Each agent can use one identity method. They are mutually exclusive; configure none of them for API-key-only governance.
+
+**OpenBox DID (Ed25519)**
+
+| Name | Purpose |
+| --- | --- |
+| `{PREFIX}_DID` (or `{PREFIX}_AGENT_DID`) | agent DID, `did:aip:<uuid>` |
+| `{PREFIX}_PRIVATE_KEY` (or `{PREFIX}_AGENT_PRIVATE_KEY`) | base64 Ed25519 seed |
+
+DID and private key must be configured together.
+
+**Okta AI Agent**
+
+| Name | Purpose |
+| --- | --- |
+| `{PREFIX}_OKTA_AGENT_PRIVATE_KEY` | PKCS#8 PEM RS256 key. On its own, the remaining identity metadata is fetched from Core at startup (`/api/v2/auth/bootstrap`). |
+| `{PREFIX}_OKTA_AGENT_ID`, `{PREFIX}_OKTA_AGENT_KEY_ID`, `{PREFIX}_AGENT_ID`, `{PREFIX}_ORGANIZATION_ID`, `{PREFIX}_DEPLOYMENT_ID`, `{PREFIX}_AGENT_PROOF_AUDIENCE` | explicit metadata; set all of them or none |
+| `{PREFIX}_AGENT_IDENTITY_METHOD` | optional explicit override: `openbox_did` or `okta_ai_agent` |
+
+**Keycloak workload identity**
+
+| Name | Purpose |
+| --- | --- |
+| `{PREFIX}_WORKLOAD_PRIVATE_KEY` | service-account key used to obtain a workload token for Core's v3 API |
 
 ## API failure policy
 
 `governance_policy`:
 
-- `fail_open` — network error → `verdict=ALLOW, fallback_used=true`, execution continues
-- `fail_closed` — network error → raises `GovernanceAPIError`
+- `fail_open` — network error, 5xx, or unparseable response → `verdict=ALLOW, fallback_used=true`, execution continues
+- `fail_closed` — the same failures raise `GovernanceAPIError` at task boundaries and stop Layer 3 operations with `GovernanceHaltError`
+
+`401`/`403` responses always fail closed with `OpenBoxAuthError` (or `OpenBoxSigningError` for a rejected signature), whatever `governance_policy` says.
 
 `on_fallback` (when Core itself returns `fallback_used=true`):
 
@@ -44,9 +75,9 @@
 
 ## Approvals
 
-When verdict is `REQUIRE_APPROVAL`:
+When the verdict is `REQUIRE_APPROVAL`:
 
-- `hitl_enabled=True` → SDK polls `/api/v1/governance/approval` at `hitl_poll_interval` until resolved
-- `hitl_enabled=False` or crew in `exclude_crews_hitl` → treated as `on_fallback` behaviour
+- `hitl_enabled=True` → the SDK polls the approval endpoint at `hitl_poll_interval` until Core decides
+- `hitl_enabled=False` or crew in `exclude_crews_hitl` → `on_fallback` decides: `log_warning` continues, `fail_closed` raises `GovernanceBlockedError`
 
-The polling loop runs until Core returns `allow`/`block`/`halt`, the approval expires (`GovernanceApprovalExpiredError`), or the request errors.
+Polling ends when Core returns `allow`/`block`/`halt`, the approval expires (`GovernanceApprovalExpiredError`), `hitl_max_wait` runs out, or Core stays unreachable for 60 polls in a row (`ApprovalTimeoutError`).

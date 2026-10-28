@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 from demo_02_crew_async.crew import ResearchCrew
 from openbox import create_openbox_engine
-from openbox.core.errors import GovernanceHaltError
+from openbox.errors import GovernanceHaltError
 
 load_dotenv()
 

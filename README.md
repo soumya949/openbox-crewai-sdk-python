@@ -1,6 +1,6 @@
 # OpenBox CrewAI SDK
 
-`openbox-crewai-sdk-python` adds OpenBox governance, approvals, guardrails, and OpenTelemetry-backed operational telemetry to CrewAI crews and flows. When an agent is configured with an AIP DID and private key, governance requests are signed per agent.
+`openbox-crewai-sdk-python` adds OpenBox governance, approvals, guardrails, and OpenTelemetry-backed operational telemetry to CrewAI crews and flows. It is the CrewAI adapter for [`openbox-sdk-python`](https://github.com/OpenBox-AI/openbox-sdk-python), which provides the governance client, request signing and instrumentation. Each agent signs its governance requests with its own identity (OpenBox DID, Okta AI Agent, or Keycloak workload identity).
 
 Use it when you need to:
 
@@ -8,12 +8,13 @@ Use it when you need to:
 - enforce approval flows from OpenBox verdicts
 - apply input and output guardrails
 - attach HTTP, database, and file telemetry to governed runs
-- enable per-agent AIP request signing when DID credentials are configured
+- sign requests per agent with an OpenBox DID, Okta AI Agent, or Keycloak workload identity
 
 ## Requirements
 
-- Python `>=3.10,<3.14`
+- Python `>=3.11,<3.14`
 - `crewai >=1.14.1`
+- `openbox-sdk-python >=1.5.0` (installed automatically)
 - an OpenBox account with each agent provisioned in the OpenBox Platform
 
 When you provision an agent in the OpenBox Platform you receive:
@@ -26,6 +27,8 @@ When you provision an agent in the OpenBox Platform you receive:
 
 ```bash
 pip install openbox-crewai-sdk-python
+# with database instrumentation
+pip install "openbox-crewai-sdk-python[db]"
 ```
 
 Required environment variables (one set per agent — the prefix matches the `env_prefix` passed to each `OpenBoxAgent`):
@@ -38,7 +41,7 @@ export OPENBOX_RESEARCHER_DID="did:aip:..."
 export OPENBOX_RESEARCHER_PRIVATE_KEY="<base64 32-byte ed25519 seed>"
 ```
 
-The DID and private key are returned once at agent creation and cannot be recovered later. If you enable AIP signing, store them with the same care as the API key.
+The DID and private key are returned once at agent creation and cannot be recovered later. If you enable signing, store them with the same care as the API key. Okta AI Agent and Keycloak workload identities use other variables under the same prefix — see [docs/configuration.md](./docs/configuration.md#agent-identity).
 
 ## Quick Start
 
@@ -101,20 +104,24 @@ with create_openbox_engine() as engine:
 
 The SDK emits two categories of OpenBox payloads:
 
+- session events: `WorkflowStarted`, `WorkflowCompleted`, `WorkflowFailed`
 - boundary task events: `ActivityStarted`, `ActivityCompleted`
-- signal events: `SignalReceived` for HITL resume and agent output
+- signal events: `SignalReceived` for task input and agent output
 
 It also captures operational spans for:
 
 - HTTP requests
 - supported database libraries
 - file operations when file instrumentation is enabled
-- LLM calls
+- functions decorated with `@governed`
+
+and gates LLM calls after a stop verdict.
 
 Important production behavior:
 
-- when DID credentials are configured, governance requests are signed with the agent's AIP DID and verified by OpenBox before evaluation
-- on OpenBox API errors the configured fallback policy decides whether execution halts or continues
+- when an identity is configured, governance requests are signed with the agent's identity and verified by OpenBox before evaluation
+- HTTP, database and file operations are sent with the credentials of the agent whose task performed them
+- on OpenBox API errors the configured fallback policy decides whether execution halts or continues; `401`/`403` always halt
 
 ## Configuration Highlights
 
@@ -138,7 +145,7 @@ See [docs/configuration.md](./docs/configuration.md) for the complete surface.
 
 - Decide explicitly between `fail_open` and `fail_closed` before deployment.
 - Give every agent its own `env_prefix` — never share API keys or DIDs across agents.
-- If you enable AIP signing, treat the private key with the same care as the API key. It is returned once at provisioning and is unrecoverable; rotate it in the OpenBox Platform if compromised.
+- If you enable signing, treat the private key with the same care as the API key. It is returned once at provisioning and is unrecoverable; rotate it in the OpenBox Platform if compromised.
 - Keep `instrument_file_io` disabled until you have a concrete file-governance requirement.
 
 ## Documentation
@@ -148,7 +155,7 @@ See [docs/configuration.md](./docs/configuration.md) for the complete surface.
 - [docs/architecture.md](./docs/architecture.md): runtime architecture and data flow
 - [docs/events-and-telemetry.md](./docs/events-and-telemetry.md): event types, HTTP/DB/file capture, signals
 - [docs/approvals-and-guardrails.md](./docs/approvals-and-guardrails.md): verdict enforcement, approvals, and guardrails
-- [docs/security-and-privacy.md](./docs/security-and-privacy.md): transport, AIP signing, capture boundaries
+- [docs/security-and-privacy.md](./docs/security-and-privacy.md): transport, request signing, capture boundaries
 - [docs/troubleshooting.md](./docs/troubleshooting.md): common failures and diagnostics
 - [docs/api-reference.md](./docs/api-reference.md): public API summary
 
@@ -156,9 +163,11 @@ See [docs/configuration.md](./docs/configuration.md) for the complete surface.
 
 Top-level exports include:
 
-- `create_openbox_engine()` and `create_openbox_flow()`
+- `create_openbox_engine()`, `create_openbox_flow()` and the `@governed` decorator
 - `OpenBoxAgent`, `OpenBoxTask`, `GovernedCrew`, `OpenBoxEngine`
-- `GovernanceConfig`, `GovernanceResponse`, `Verdict`
-- error types: `OpenBoxError`, `OpenBoxConfigError`, `OpenBoxAuthError`, `OpenBoxNetworkError`, `OpenBoxInsecureURLError`, `GovernanceAPIError`, `GovernanceHaltError`, `GovernanceBlockedError`, `GovernanceApprovalExpiredError`
+- `GovernanceConfig`, `EvaluationResult` (alias `GovernanceResponse`), `Verdict`
+- error types: `OpenBoxError`, `OpenBoxConfigError`, `OpenBoxAuthError`, `OpenBoxSigningError`, `OpenBoxNetworkError`, `OpenBoxInsecureURLError`, `ContractError`, `GovernanceAPIError`, `GovernanceHaltError`, `GovernanceBlockedError`, `GuardrailsValidationError`, `ApprovalExpiredError` (alias `GovernanceApprovalExpiredError`), `ApprovalRejectedError`, `ApprovalTimeoutError`
+
+Upgrading from 1.x? See [CHANGELOG.md](./CHANGELOG.md).
 
 See [docs/api-reference.md](./docs/api-reference.md) for the full reference.

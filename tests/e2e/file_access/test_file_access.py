@@ -23,7 +23,7 @@ from crewai.tools import tool
 from dotenv import load_dotenv
 
 from openbox import OpenBoxAgent, OpenBoxTask, create_openbox_engine
-from openbox.core.errors import GovernanceBlockedError, GovernanceHaltError
+from openbox.errors import GovernanceBlockedError, GovernanceHaltError
 
 load_dotenv(Path(__file__).parent / ".env")
 

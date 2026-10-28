@@ -3,7 +3,7 @@ name = "demo_04_collaboration"
 version = "0.1.0"
 description = "OpenBox-governed CrewAI demo — three signed agents with delegation"
 authors = [{ name = "OpenBox Team", email = "tony@openbox.ai" }]
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "crewai[tools]>=1.14.1",
     "python-dotenv>=1.1.1",

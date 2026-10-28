@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from demo_03_flow.crews.research_crew.research_crew import ResearchCrew
 from demo_03_flow.crews.writing_crew.writing_crew import WritingCrew
 from openbox import OpenBoxEngine, create_openbox_engine, create_openbox_flow
-from openbox.core.errors import GovernanceHaltError
+from openbox.errors import GovernanceHaltError
 
 load_dotenv()
 

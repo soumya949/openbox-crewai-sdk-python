@@ -22,7 +22,7 @@ from crewai import LLM, Crew, Process
 from dotenv import load_dotenv
 
 from openbox import OpenBoxAgent, OpenBoxTask, create_openbox_engine
-from openbox.core.errors import GovernanceHaltError
+from openbox.errors import GovernanceHaltError
 
 load_dotenv(Path(__file__).parent / ".env")
 

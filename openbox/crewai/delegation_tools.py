@@ -1,4 +1,4 @@
-"""DelegateWorkTool / AskQuestionTool subclasses that propagate GovernanceHaltError.
+"""DelegateWorkTool / AskQuestionTool subclasses that propagate governance stops.
 
 Stock CrewAI BaseAgentTool._execute (base_agent_tools.py:130-134) wraps the
 delegated agent's execute_task in a broad `except Exception`. That swallows
@@ -24,8 +24,7 @@ from crewai.tools.agent_tools.ask_question_tool import AskQuestionTool
 from crewai.tools.agent_tools.delegate_work_tool import DelegateWorkTool
 from crewai.tools.base_tool import BaseTool
 from crewai.utilities.i18n import I18N, get_i18n
-
-from openbox.core.errors import GovernanceBlockedError, GovernanceHaltError
+from openbox_core.errors import GovernanceBlockedError, GovernanceHaltError
 
 
 class _OpenBoxAgentToolMixin:
