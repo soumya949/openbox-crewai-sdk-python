@@ -1,6 +1,6 @@
 # Demo 01 — Crew Sync
 
-Simplest OpenBox demo. One signed agent (`researcher`) runs a single task. The crew is wrapped with `engine.govern(...)` so every `ActivityStarted` / `ActivityCompleted` / operation event is signed with the agent's DID before being sent to OpenBox.
+Simplest OpenBox demo. One governed agent (`researcher`) runs a single task. The crew is wrapped with `engine.govern(...)` so every `ActivityStarted` / `ActivityCompleted` / operation event is sent to OpenBox with the agent's own credentials.
 
 ## Layout
 
@@ -12,7 +12,7 @@ This demo follows the standard `crewai create crew` layout, with OpenBox-specifi
 
 ## Prerequisites
 
-1. In the OpenBox Platform UI, create the `researcher` agent and provision its identity (**Agent Settings → API Access → Provision Identity**). Capture the agent's API key, DID, and base64 private key.
+1. In the OpenBox Platform UI, create the `researcher` agent. Save the API key and the workload private key shown when the agent is created (IAM v3 workload identity; the private key is shown once).
 2. Copy `.env.example` to `.env` and fill in those values plus your `OPENAI_API_KEY`.
 
 ## Run

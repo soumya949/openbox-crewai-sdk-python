@@ -1,10 +1,9 @@
 #!/usr/bin/env python
-"""Collaboration demo — three governed, signed agents with delegation enabled.
+"""Collaboration demo — three governed agents with delegation enabled.
 
-Prerequisite: provision an identity for each of the three agents in the
-OpenBox Platform (Agent Settings -> API Access -> Provision Identity).
-Paste the returned DID and base64 private key for each into ``.env`` under
-the matching env prefix (``OPENBOX_RESEARCHER_``, ``OPENBOX_WRITER_``,
+Prerequisite: create the three agents in the OpenBox Platform and put each
+one's API key and workload private key into ``.env`` under the matching env
+prefix (``OPENBOX_RESEARCHER_``, ``OPENBOX_WRITER_``,
 ``OPENBOX_EDITOR_``).
 """
 

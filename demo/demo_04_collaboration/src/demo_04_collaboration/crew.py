@@ -13,7 +13,7 @@ class CollaborationCrew:
     Specialist and editorial review to the Content Editor. Every
     ``execute_task`` call — including the delegated sub-tasks routed through
     CrewAI's DelegateWorkTool — is intercepted by OpenBox governance and
-    signed with its agent's DID.
+    sent with its agent's own credentials.
     """
 
     agents: list[BaseAgent]

@@ -1,11 +1,11 @@
 # Demo 03 — Flow
 
-Governed CrewAI **Flow** with 2 crews and 3 signed agents:
+Governed CrewAI **Flow** with 2 crews and 3 governed agents:
 
 - **Research Crew** — `senior_researcher` + `data_analyst`
 - **Writing Crew** — `technical_writer`
 
-The Flow orchestrates them via `@start` / `@listen`. Each crew is wrapped with `engine.govern(...)`, so every governance event from every agent is signed with that agent's DID.
+The Flow orchestrates them via `@start` / `@listen`. Each crew is wrapped with `engine.govern(...)`, so every governance event from every agent is sent with that agent's own credentials.
 
 ## Layout
 
@@ -19,7 +19,7 @@ Standard `crewai create flow` layout:
 
 ## Prerequisites
 
-1. In the OpenBox Platform UI, create three agents — `senior_researcher`, `data_analyst`, and `technical_writer` — and provision an identity for each (**Agent Settings → API Access → Provision Identity**). For each, capture the API key, DID, and base64 private key.
+1. In the OpenBox Platform UI, create three agents — `senior_researcher`, `data_analyst`, and `technical_writer`. For each, save the API key and the workload private key shown when the agent is created (IAM v3 workload identity; the private key is shown once).
 2. Copy `.env.example` to `.env` and fill in the three sets of credentials plus your `OPENAI_API_KEY`.
 
 ## Run

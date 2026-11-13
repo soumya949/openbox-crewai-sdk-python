@@ -1,10 +1,9 @@
 #!/usr/bin/env python
-"""Sync crew demo — 1 governed agent signing every governance request with its DID.
+"""Sync crew demo — 1 governed agent sending governance requests with its own identity.
 
-Prerequisite: provision an identity for the researcher agent in the OpenBox
-Platform (Agent Settings -> API Access -> Provision Identity). Paste the
-returned DID and base64 private key into .env as OPENBOX_RESEARCHER_DID and
-OPENBOX_RESEARCHER_PRIVATE_KEY.
+Prerequisite: create the researcher agent in the OpenBox Platform and put its
+API key and workload private key into .env as OPENBOX_RESEARCHER_API_KEY and
+OPENBOX_RESEARCHER_WORKLOAD_PRIVATE_KEY.
 """
 
 import logging

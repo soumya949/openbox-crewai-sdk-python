@@ -7,7 +7,7 @@ from openbox import OpenBoxAgent, OpenBoxTask
 
 @CrewBase
 class ResearchCrew:
-    """Single governed agent — every governance request is signed with the agent's DID."""
+    """Single governed agent — every governance request carries the agent's own credentials."""
 
     agents: list[BaseAgent]
     tasks: list[Task]
